@@ -68,11 +68,7 @@ services:
       - minio_data:/data
     networks:
       - news-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+    # MinIO image does not ship with curl; use startup-only dependency instead.
 
   # ── MinIO Init — création des buckets ────────────────────────
   minio-init:
@@ -80,7 +76,7 @@ services:
     container_name: news_minio_init
     depends_on:
       minio:
-        condition: service_healthy
+        condition: service_started
     networks:
       - news-net
     entrypoint: >
@@ -231,7 +227,7 @@ services:
       DW_DSN: postgresql://dwuser:dwpassword@postgres:5432/news_dw
     depends_on:
       minio:
-        condition: service_healthy
+        condition: service_started
       postgres:
         condition: service_healthy
     volumes:

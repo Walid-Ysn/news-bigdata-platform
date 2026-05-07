@@ -103,7 +103,7 @@ news-bigdata-platform/
 ```bash
 git clone https://github.com/Walid-Ysn/news-bigdata-platform    
 cd news-bigdata-platform
-docker-compose up -d
+
 ```
 
 Services démarrés :
@@ -230,7 +230,7 @@ Tests automatiques sur chaque batch :
 | Cohérence   | Pas de doublon (article_id)  | Obligatoire |
 
 Score qualité = articles 100% valides / total × 100
-
+docker-compose up -d
 ### Étape 9 — Gouvernance
 
 - **Data Lineage** : chaque transformation enregistrée (source, destination, nombre d'enregistrements, timestamp)
