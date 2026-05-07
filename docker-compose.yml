@@ -1,0 +1,260 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────
+# News Big Data Platform — Docker Compose
+# Services :
+#   - MinIO         : Data Lake (stockage objet S3-compatible)
+#   - PostgreSQL    : Data Warehouse
+#   - Kafka+Zookeeper : Streaming ingestion
+#   - Apache Airflow : Orchestration
+#   - Grafana       : Visualisation dashboards
+#   - App           : Pipeline Python
+# ─────────────────────────────────────────────────────────────────
+
+networks:
+  news-net:
+    driver: bridge
+
+volumes:
+  minio_data:
+  postgres_data:
+  airflow_logs:
+  airflow_plugins:
+  grafana_data:
+  zookeeper_data:
+  kafka_data:
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.8.1-python3.11
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__CORE__FERNET_KEY: ""
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    MINIO_ENDPOINT: minio:9000
+    MINIO_ACCESS_KEY: minioadmin
+    MINIO_SECRET_KEY: minioadmin123
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    DW_TYPE: postgres
+    DW_DSN: postgresql://dwuser:dwpassword@postgres:5432/news_dw
+    PYTHONPATH: /opt/airflow/project
+  volumes:
+    - ./orchestration/dags:/opt/airflow/dags
+    - airflow_logs:/opt/airflow/logs
+    - airflow_plugins:/opt/airflow/plugins
+    - .:/opt/airflow/project
+  networks:
+    - news-net
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+
+  # ── MinIO — Data Lake ────────────────────────────────────────
+  minio:
+    image: minio/minio:RELEASE.2024-01-13T07-53-03Z
+    container_name: news_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"    # API S3
+      - "9001:9001"    # Console Web
+    volumes:
+      - minio_data:/data
+    networks:
+      - news-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ── MinIO Init — création des buckets ────────────────────────
+  minio-init:
+    image: minio/mc:latest
+    container_name: news_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - news-net
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set myminio http://minio:9000 minioadmin minioadmin123;
+        mc mb --ignore-existing myminio/news-datalake;
+        mc mb --ignore-existing myminio/news-datalake/bronze;
+        mc mb --ignore-existing myminio/news-datalake/silver;
+        mc mb --ignore-existing myminio/news-datalake/gold;
+        echo 'MinIO buckets ready.';
+      "
+
+  # ── PostgreSQL — Data Warehouse + Airflow metadata ──────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: news_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - news-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Zookeeper (requis par Kafka) ─────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    container_name: news_zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+    networks:
+      - news-net
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo ruok | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Kafka — Streaming ingestion ──────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    container_name: news_kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 24
+    ports:
+      - "29092:29092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - news-net
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ── Kafka Init — création du topic ──────────────────────────
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.3
+    container_name: news_kafka_init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - news-net
+    entrypoint: >
+      /bin/sh -c "
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists
+          --topic news-articles-raw --partitions 3 --replication-factor 1;
+        echo 'Kafka topic created.';
+      "
+
+  # ── Airflow — Init DB ────────────────────────────────────────
+  airflow-init:
+    <<: *airflow-common
+    container_name: news_airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com \
+          --password admin123
+
+  # ── Airflow Webserver ────────────────────────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: news_airflow_webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ── Airflow Scheduler ────────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: news_airflow_scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ── Pipeline App ─────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: news_app
+    environment:
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DW_TYPE: postgres
+      DW_DSN: postgresql://dwuser:dwpassword@postgres:5432/news_dw
+    depends_on:
+      minio:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    networks:
+      - news-net
+    command: python -m scrapers.scraper
+
+  # ── Grafana — Dashboards ─────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.3.1
+    container_name: news_grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_INSTALL_PLUGINS: grafana-worldmap-panel,grafana-piechart-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - news-net
+    depends_on:
+      postgres:
+        condition: service_healthy

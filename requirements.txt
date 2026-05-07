@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────
+# News Big Data Platform — Python Dependencies
+# ─────────────────────────────────────────────────────────
+
+# Web Scraping
+requests==2.31.0
+beautifulsoup4==4.12.3
+scrapy==2.11.1
+lxml==5.1.0
+html5lib==1.1
+
+# Data Processing
+pandas==2.2.0
+numpy==1.26.4
+
+# Language Detection
+langdetect==1.0.9
+
+# Data Lake - MinIO
+minio==7.2.5
+
+# Streaming - Kafka
+kafka-python==2.0.2
+
+# Data Warehouse - PostgreSQL
+psycopg2-binary==2.9.9
+
+# Big Data - PySpark (optionnel, décommenter si Spark disponible)
+# pyspark==3.5.0
+
+# Orchestration - Airflow (installé séparément via image Docker)
+# apache-airflow==2.8.1
+
+# Data Quality
+great-expectations==0.18.12
+
+# Visualisation (Dashboard Python optionnel)
+dash==2.16.1
+dash-bootstrap-components==1.5.0
+plotly==5.18.0
+
+# NLP / Keywords
+# nltk==3.8.1  # optionnel
+
+# Utilitaires
+python-dotenv==1.0.1
+schedule==1.2.1
+tqdm==4.66.2
+colorlog==6.8.2

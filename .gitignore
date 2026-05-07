@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+.env
+.env.*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets and keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+secrets/
+credentials.json
+
+# Data outputs
+datalake/
+data/
+datasets/
+*.csv
+*.tsv
+*.parquet
+*.pq
+*.avro
+*.orc
+*.jsonl
+*.db
+*.sqlite
+*.duckdb
+*.gz
+*.zip
+
+# Logs
+*.log
